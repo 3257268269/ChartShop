@@ -7,6 +7,7 @@ import ReactEcharts from 'echarts-for-react'
 
 import 'antd/dist/antd.css';
 import './style/mainpage.css';
+import Operation from 'antd/lib/transfer/operation';
 
 const { Header, Footer } = Layout;
 const buttonRef = React.createRef()
@@ -23,7 +24,7 @@ const noiseThreshold = 3;  //噪音波动范围
 const ChartShop = () => {
 
   const [sourceData, setSourceData] = useState([]);      //原始数据
-  const [changeRecord, setChangeRecord] = useState([]);  //数据修改记录
+  const [operationStack, setOperationStack] = useState([]);  //数据修改记录
   const [curData, setCurData] = useState([]);            //当前数据
   const [curRange, setCurRange] = useState([0,0]);       //当前选中范围
   const [curSelected, setCurSelected] = useState(-1);    //当前选中的点下标
@@ -31,7 +32,7 @@ const ChartShop = () => {
   const [editMode, setEditMode] = useState("readOnly");  //编辑模式 "readOnly":只读模式（不可操作） "rangeOp":范围操作  "pointOp":点操作
   const [moveDelt, setMoveDelt] = useState(5);           //平移步长
 
-  const handleOpenDialog = (e) => {
+  const onHandleOpenDialog = (e) => {
     if (buttonRef.current) {
       buttonRef.current.open(e)
     }
@@ -58,7 +59,7 @@ const ChartShop = () => {
     alert(err);
   }
 
-  const downloadData = () => {
+  const onDownloadData = () => {
     let fileName = "data.csv";
     let formatData = curData.map((v,k)=>`${k},${v}`);
     formatData = formatData.join('\n');
@@ -74,19 +75,72 @@ const ChartShop = () => {
     }
   }
 
-  const undo = () => {
-    notification.info({
-      message: '开发中',
-      description:
-        '敬请期待',
-    })
+  const onUndo = () => {
+    if(operationStack.length == 0) {
+      notification.info({
+        message: '已经回到起始状态',
+      })
+    } else {
+      
+      let lastOper = operationStack.pop();
+      console.log(lastOper);
+      if(lastOper.type == 'range') {
+        setCurRange(lastOper.detail.range);
+        switch(lastOper.subtype) {
+          case 'delete':{
+            insertData(lastOper.detail.range[0] - 1, lastOper.detail.deletedData);
+          }break;
+          case 'move':{
+            move(lastOper.detail.range, -lastOper.detail.step);
+          }break;
+          case 'noise':{
+            let temp = curData;
+            let noise = lastOper.detail.noiseData; //噪音
+            let range = lastOper.detail.range;
+            for(let i = range[0], j = 0; i <= range[1]; i++, j++) {
+              temp[i] -= noise[j];
+            }
+            setCurData(temp);
+            echarts_react.getEchartsInstance().setOption(option);
+          }break;
+          case 'flipX':{
+            flipX(lastOper.detail.range);
+          }break;
+          case 'flipY':{
+            flipY(lastOper.detail.range);
+          }break;
+          case 'cut' : {
+            insertData(lastOper.detail.range[0] - 1, lastOper.detail.cutted);
+          }break;
+        }
+      } else {
+        setCurSelected(lastOper.detail.selected);
+        switch(lastOper.subtype) {
+          case 'delete':{
+            insertData(lastOper.detail.selected - 1, [lastOper.detail.data]);
+          }break;
+          case 'move':{
+            move([lastOper.detail.selected, lastOper.detail.selected], -lastOper.detail.step);
+          }break;
+          case 'paste':{
+            let temp = curData;
+            temp.splice(lastOper.detail.selected + 1, lastOper.detail.length);
+            echarts_react.getEchartsInstance().setOption(option);
+            setCurData(temp);
+          }break;
+        }
+      }
+      echarts_react.getEchartsInstance().setOption(option);
+      setOperationStack([...operationStack]);
+    }
   }
 
-  const resetData = () => {
+  const onResetData = () => {
     setCurData(sourceData.map(v=>v));
+    setOperationStack([]);//清空所有操作
   }
 
-  const handleChange = (value) => {
+  const onHandleChange = (value) => {
     setMoveDelt(parseInt(value));
   }
 
@@ -127,7 +181,7 @@ const ChartShop = () => {
     setCurRange([r[0], r[1]]);
   }
   
-  const copyData = () => {
+  const onCopyData = () => {
     if(!checkArea())return;
     setClipBoard(curData.slice(curRange[0], curRange[1] + 1));
     notification.info({
@@ -137,94 +191,123 @@ const ChartShop = () => {
     })
   }
 
-  const selectAll = () => {
+  const onSelectAll = () => {
     setCurRange([0, curData.length - 1]);
   }
 
-  const resetRange = () => {
+  const onResetRange = () => {
     setCurRange([0, 0]);
   }
 
-  const deleteRange = () => {
+  const onDeleteRange = () => {
     if(!checkArea())return;
     let temp = curData;
-    temp.splice(curRange[0], curRange[1] - curRange[0] + 1);
+    let deleted = temp.splice(curRange[0], curRange[1] - curRange[0] + 1);
     echarts_react.getEchartsInstance().setOption(option);
     setCurData(temp);
     setCurRange([0,0]);
-    notification.info({
-      message: '删除成功',
-      description:
-        `删除数据范围：[${curRange[0]},${curRange[1]}]`,
-    })
+    // notification.info({
+    //   message: '删除成功',
+    //   description:
+    //     `删除数据范围：[${curRange[0]},${curRange[1]}]`,
+    // })
+
+    let operation = {
+      'description' : `删除区间：[${curRange[0]},${curRange[1]}]`,
+      'type' : 'range',
+      'subtype' : 'delete',
+      'detail' : {
+        'deletedData' : deleted,
+        'range' : [curRange[0], curRange[1]],
+      }
+    };
+    setOperationStack([...operationStack, operation]);
   }
 
-  const addNoise = () => {
+  const onAddNoise = () => {
     if(!checkArea())return;
     let temp = curData;
+    let noise = []; //噪音
     for(let i = curRange[0]; i <= curRange[1]; i++) {
-      temp[i] += parseInt(Math.random()*(2*noiseThreshold+1)-noiseThreshold,10);;
+      let ns = parseInt(Math.random()*(2*noiseThreshold+1)-noiseThreshold,10);
+      temp[i] += ns;
+      noise.push(ns);
     }
     setCurData(temp);
     echarts_react.getEchartsInstance().setOption(option);
     
-    notification.info({
-      message: '加噪音成功',
-      description:
-        `加噪音数据范围：[${curRange[0]},${curRange[1]}]`,
-    })
+    // notification.info({
+    //   message: '加噪音成功',
+    //   description:
+    //     `加噪音数据范围：[${curRange[0]},${curRange[1]}]`,
+    // })
+
+    let operation = {
+      'description' : `在区间[${curRange[0]},${curRange[1]}]上加噪音`,
+      'type' : 'range',
+      'subtype' : 'noise',
+      'detail' : {
+        'noiseData' : noise,
+        'range' : [curRange[0],curRange[1]]
+      }
+    };
+    setOperationStack([...operationStack, operation]);
   }
 
-  const curryingRangeMove = (dir) => {
+  const onCurryingRangeMove = (dir) => {
     return function () {
       if(!checkArea())return;
       let d = dir == 1 ? moveDelt : -moveDelt;
-      let temp = curData;
-      for(let i = curRange[0]; i <= curRange[1]; i++) {
-        temp[i] += d;
-      }
-      setCurData(temp);
-      echarts_react.getEchartsInstance().setOption(option);
+      move(curRange, d);
+
+      let operation = {
+        'description' : `区间[${curRange[0]},${curRange[1]}]整体${ dir == 1 ? '上' : '下'}移${moveDelt}个单位`,
+        'type' : 'range',
+        'subtype' : 'move',
+        'detail' : {
+          'step' : d,
+          'range' : [curRange[0],curRange[1]]
+        }
+      };
+      setOperationStack([...operationStack, operation]);
     }
   }
 
-  const flipX = () => {
+  const onFlipX = () => {
     if(!checkArea())return;
-    let temp = curData;
-    let temp_1 = curData.map(v=>v);
-    for(let i = curRange[0], j = curRange[1]; i <= curRange[1]; i++, j--) {
-      temp[i] = temp_1[j];
-    }
-    setCurData(temp);
-    echarts_react.getEchartsInstance().setOption(option);
+    flipX(curRange);
+
+    let operation = {
+      'description' : `区间[${curRange[0]},${curRange[1]}]整体左右翻转`,
+      'type' : 'range',
+      'subtype' : 'flipX',
+      'detail' : {
+        'range' : [curRange[0],curRange[1]]
+      }
+    };
+    setOperationStack([...operationStack, operation]);
   }
 
-  const flipY = () => {
+  const onFlipY = () => {
     if(!checkArea())return;
-    let _max = curData[curRange[0]];
-    let _min = curData[curRange[0]];
-    let temp = curData;
-    for(let i = curRange[0]; i < curRange[1]; i++) {
-      if(temp[i] > _max) {
-        _max = temp[i];
+    flipY(curRange);
+
+    let operation = {
+      'description' : `区间[${curRange[0]},${curRange[1]}]整体上下翻转`,
+      'type' : 'range',
+      'subtype' : 'flipY',
+      'detail' : {
+        'range' : [curRange[0],curRange[1]]
       }
-      if(temp[i] < _min) {
-        _min = temp[i];
-      }
-    }
-    let _axis = (_max + _min)/2;
-    for(let i = curRange[0]; i < curRange[1]; i++) {
-      temp[i] -= 2*(temp[i] - _axis);
-    }
-    setCurData(temp);
-    echarts_react.getEchartsInstance().setOption(option);
+    };
+    setOperationStack([...operationStack, operation]);
   }
 
-  const cutData = () => {
+  const onCutData = () => {
     if(!checkArea())return;
     setClipBoard(curData.slice(curRange[0], curRange[1] + 1));
     let temp = curData;
-    temp.splice(curRange[0], curRange[1] - curRange[0] + 1);
+    let cutted = temp.splice(curRange[0], curRange[1] - curRange[0] + 1);
     echarts_react.getEchartsInstance().setOption(option);
     setCurData(temp);
     setCurRange([0,0]);
@@ -233,6 +316,17 @@ const ChartShop = () => {
       description:
         `剪切范围：[${curRange[0]},${curRange[1]}]`,
     })
+
+    let operation = {
+      'description' : `剪切区间：[${curRange[0]},${curRange[1]}]`,
+      'type' : 'range',
+      'subtype' : 'cut',
+      'detail' : {
+        'cutted' : cutted,
+        'range' : [curRange[0], curRange[1]],
+      }
+    };
+    setOperationStack([...operationStack, operation]);
   }
   //========================= 范围操作模式相关 END ==========================
 
@@ -250,7 +344,7 @@ const ChartShop = () => {
     return true;
   }
   
-  const pasteData = () => {
+  const onPasteData = () => {
     if(!checkPoint())return;
     if(clipBoard.length == 0) {
       notification.warning({
@@ -261,14 +355,22 @@ const ChartShop = () => {
       return false;
     } 
 
-    let temp = curData;
-    let _left = curData.slice(0, curSelected + 1);
-    let _right = curData.slice(curSelected + 1, curData.length);
-    setCurData(_left.concat(clipBoard).concat(_right));
-    echarts_react.getEchartsInstance().setOption(option);
+    insertData(curSelected, clipBoard);
+
+    let operation = {
+      'description' : `${curSelected}点后插入数据`,
+      'type' : 'point',
+      'subtype' : 'paste',
+      'detail' : {
+        'selected' : curSelected,
+        'length' : clipBoard.length
+      }
+    };
+    setOperationStack([...operationStack, operation]);
+
   }
 
-  const curryingPointMove = (dir) => {
+  const onCurryingPointMove = (dir) => {
     return function () {
       if(!checkPoint())return;
       let d = dir == 1 ? moveDelt : -moveDelt;
@@ -277,13 +379,24 @@ const ChartShop = () => {
       setCurData(temp);
       option.series[0].markPoint.data[0].coord = [curSelected, temp[curSelected] + d]
       echarts_react.getEchartsInstance().setOption(option);
+
+      let operation = {
+        'description' : `点${curSelected}${ dir == 1 ? '上' : '下' }移${moveDelt}个单位`,
+        'type' : 'point',
+        'subtype' : 'move',
+        'detail' : {
+          'step' : d,
+          'selected' : curSelected
+        }
+      };
+      setOperationStack([...operationStack, operation]);
     }
   }
 
-  const deletePoint = () => {
+  const onDeletePoint = () => {
     if(!checkPoint())return;
     let temp = curData;
-    temp.splice(curSelected, 1);
+    let deleted = temp.splice(curSelected, 1);
     echarts_react.getEchartsInstance().setOption(option);
     setCurData(temp);
     setCurSelected(-1);
@@ -292,6 +405,17 @@ const ChartShop = () => {
       description:
         `删除数据下标：[${curSelected}]`,
     })
+
+    let operation = {
+      'description' : `删除点${curSelected}`,
+      'type' : 'point',
+      'subtype' : 'delete',
+      'detail' : {
+        'selected' : curSelected,
+        'data' : deleted[0]
+      }
+    };
+    setOperationStack([...operationStack, operation]);
   }
 
   const onPointSelected = (v) => {
@@ -317,12 +441,62 @@ const ChartShop = () => {
 
 //========================= 点操作相关 END ==============================
 
+//======================================================
+
+const insertData = (index, data) => {
+  let _left = curData.slice(0, index + 1);
+  let _right = curData.slice(index + 1, curData.length);
+  setCurData(_left.concat(data).concat(_right));
+  echarts_react.getEchartsInstance().setOption(option);
+}
+
+const move = (range, delt) => {
+  let temp = curData;
+  for(let i = range[0]; i <= range[1]; i++) {
+    temp[i] += delt;
+  }
+  setCurData(temp);
+  echarts_react.getEchartsInstance().setOption(option);
+}
+
+const flipX = (range) => {
+  let temp = curData;
+  let temp_1 = curData.map(v=>v);
+  for(let i = range[0], j = range[1]; i <= range[1]; i++, j--) {
+    temp[i] = temp_1[j];
+  }
+  setCurData(temp);
+  echarts_react.getEchartsInstance().setOption(option);
+}
+
+const flipY = (range) => {
+  let _max = curData[range[0]];
+  let _min = curData[range[0]];
+  let temp = curData;
+  for(let i = range[0]; i < range[1]; i++) {
+    if(temp[i] > _max) {
+      _max = temp[i];
+    }
+    if(temp[i] < _min) {
+      _min = temp[i];
+    }
+  }
+  let _axis = (_max + _min)/2;
+  for(let i = range[0]; i < range[1]; i++) {
+    temp[i] -= 2*(temp[i] - _axis);
+  }
+  setCurData(temp);
+  echarts_react.getEchartsInstance().setOption(option);
+}
+
+//========================================================
+
   let echarts_react = null;
 
   const option = {
     title: {
       text: `最新数据：（${opName[editMode]}）`,
-      subtext: '上一步操作：todo',
+      subtext: `上一步操作：${operationStack.length == 0 ? '无操作' : operationStack[operationStack.length - 1]['description']}`,
       left: 'center',
       align: 'right'
     },
@@ -384,8 +558,8 @@ const ChartShop = () => {
   return (
     <Layout>
       <Header className="header" style={{padding:"0 10px"}}>
-        <div className="logo" style={{color:"white",fontSize:"28px"}}>
-          数据编辑器v3.6
+        <div className="logo" style={{color:"white",fontSize:"23px"}}>
+          Chart Shop v3.6
         </div>
       </Header>
       <div className="main-page"> 
@@ -406,14 +580,14 @@ const ChartShop = () => {
                   <Search disabled={editMode!='rangeOp'}  size="small" placeholder="a-b" enterButton="选中"  onSearch={onRangeSelected} />    
                   <Button
                     disabled={editMode!='rangeOp'}
-                    onClick={resetRange}
+                    onClick={onResetRange}
                     style={{width:"48%",marginRight:"4px"}} size={"small"} 
                   >
                     重置
                   </Button>
                   <Button
                     disabled={editMode!='rangeOp'}
-                    onClick={selectAll}
+                    onClick={onSelectAll}
                     style={{width:"48%", marginTop:"3px"}} size={"small"} 
                   >
                     全选
@@ -422,7 +596,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='rangeOp'}
-                    onClick={addNoise}
+                    onClick={onAddNoise}
                     type="dashed" style={{width:"100%", marginTop:"3px"}} size={"small"} 
                   >
                     加噪音
@@ -432,7 +606,7 @@ const ChartShop = () => {
                     danger
                     disabled={editMode!='rangeOp'}
                     type='dashed'
-                    onClick={curryingRangeMove(1)}
+                    onClick={onCurryingRangeMove(1)}
                     style={{width:"48%",marginRight:"6px", marginTop:"3px"}} size={"small"} 
                   >
                     上移
@@ -441,7 +615,7 @@ const ChartShop = () => {
                     danger
                     disabled={editMode!='rangeOp'}
                     type='dashed'
-                    onClick={curryingRangeMove(-1)}
+                    onClick={onCurryingRangeMove(-1)}
                     style={{width:"48%", marginTop:"3px"}} size={"small"} 
                   >
                     下移
@@ -451,7 +625,7 @@ const ChartShop = () => {
                     danger
                     disabled={editMode!='rangeOp'}
                     type='dashed'
-                    onClick={flipX}
+                    onClick={onFlipX}
                     style={{width:"48%",marginRight:"6px", marginTop:"3px"}} size={"small"} 
                   >
                     左右翻转
@@ -460,7 +634,7 @@ const ChartShop = () => {
                     danger
                     disabled={editMode!='rangeOp'}
                     type='dashed'
-                    onClick={flipY}
+                    onClick={onFlipY}
                     style={{width:"48%", marginTop:"3px"}} size={"small"} 
                   >
                     上下翻转
@@ -470,7 +644,7 @@ const ChartShop = () => {
                     disabled={editMode!='rangeOp'}
                     danger
                     type="primary" 
-                    onClick={deleteRange}
+                    onClick={onDeleteRange}
                     style={{width:"100%", marginTop:"3px"}} size={"small"} 
                   >
                     删除
@@ -479,7 +653,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='rangeOp'}
-                    onClick={copyData}
+                    onClick={onCopyData}
                     type="dashed" style={{width:"48%",marginRight:"6px", marginTop:"3px"}} size={"small"} 
                   >
                     复制
@@ -487,7 +661,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='rangeOp'}
-                    onClick={cutData}
+                    onClick={onCutData}
                     type="dashed" style={{width:"48%", marginTop:"3px"}} size={"small"} 
                   >
                     剪切
@@ -503,7 +677,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='pointOp'}
-                    onClick={curryingPointMove(1)}
+                    onClick={onCurryingPointMove(1)}
                     type="dashed" style={{width:"48%", marginRight:"6px", marginTop:"3px"}} size={"small"} 
                   >
                     上移
@@ -511,7 +685,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='pointOp'}
-                    onClick={curryingPointMove(-1)}
+                    onClick={onCurryingPointMove(-1)}
                     type="dashed" style={{width:"48%", marginTop:"3px"}} size={"small"} 
                   >
                     下移
@@ -519,7 +693,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='pointOp'}
-                    onClick={deletePoint}
+                    onClick={onDeletePoint}
                     type="primary" style={{width:"48%", marginRight:"6px", marginTop:"3px"}} size={"small"} 
                   >
                     删除
@@ -527,7 +701,7 @@ const ChartShop = () => {
                   <Button
                     danger
                     disabled={editMode!='pointOp'}
-                    onClick={pasteData}
+                    onClick={onPasteData}
                     type="dashed" style={{width:"48%", marginTop:"3px"}} size={"small"} 
                   >
                     粘贴
@@ -556,7 +730,7 @@ const ChartShop = () => {
                       <Button
                         danger
                         type='button'
-                        onClick={handleOpenDialog}
+                        onClick={onHandleOpenDialog}
                         type="primary" icon={<PlusOutlined />} style={{width:"100px"}} size={"small"} 
                       >
                       导入数据
@@ -570,27 +744,27 @@ const ChartShop = () => {
                 <>
                   <Button
                         type='button'
-                        onClick={resetData}
+                        onClick={onResetData}
                         type="primary" icon={<ReloadOutlined />} style={{marginRight:"10px", width:"100px"}} size={"small"} 
                       >
                         重置数据
                   </Button>
                   <Button
                         type='button'
-                        onClick={downloadData}
+                        onClick={onDownloadData}
                         type="primary" icon={<DownloadOutlined />} style={{marginRight:"10px", width:"100px"}} size={"small"} 
                       >
                         下载数据
                   </Button>
                   <Button
                         type='button'
-                        onClick={undo}
+                        onClick={onUndo}
                         type="dashed" icon={<UndoOutlined />} style={{marginRight:"10px", width:"100px"}} size={"small"} 
                       >
                         回退操作
                   </Button>
                   单次平移步长：
-                  <Select defaultValue="5" size="small" style={{ width: 120, height: 20 }}  onChange={handleChange}>
+                  <Select defaultValue="5" size="small" style={{ width: 120, height: 20 }}  onChange={onHandleChange}>
                     <Option value="1">1</Option>
                     <Option value="2">2</Option>
                     <Option value="3">3</Option>
@@ -613,6 +787,7 @@ const ChartShop = () => {
                   <Tag visible={curData.length != 0 } color="cyan">当前剪贴板数据长度：{clipBoard.length}</Tag>
                   <Tag visible={curData.length != 0 } color="green">当前选中范围：[{curRange[0]}, {curRange[1]}]</Tag>
                   <Tag visible={curData.length != 0 } color="orange">当前选中的点：{curSelected}</Tag>
+                  <Tag visible={curData.length != 0 } color="green">可回退步数：{operationStack.length}</Tag>
                 </div>
                 <div className=".chart-container box-shadow"> 
                   <ReactEcharts
