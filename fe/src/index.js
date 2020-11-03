@@ -30,7 +30,7 @@ const ChartShop = () => {
   const [curSelected, setCurSelected] = useState(-1);    //当前选中的点下标
   const [clipBoard, setClipBoard] = useState([]);        //当前剪贴板内容
   const [editMode, setEditMode] = useState("readOnly");  //编辑模式 "readOnly":只读模式（不可操作） "rangeOp":范围操作  "pointOp":点操作
-  const [moveDelt, setMoveDelt] = useState(5);           //平移步长
+  const [moveDelt, setMoveDelt] = useState(1);           //平移步长
 
   const onHandleOpenDialog = (e) => {
     if (buttonRef.current) {
@@ -138,10 +138,6 @@ const ChartShop = () => {
   const onResetData = () => {
     setCurData(sourceData.map(v=>v));
     setOperationStack([]);//清空所有操作
-  }
-
-  const onHandleChange = (value) => {
-    setMoveDelt(parseInt(value));
   }
 
   //=========================范围操作模式相关 START ==========================
@@ -443,53 +439,63 @@ const ChartShop = () => {
 
 //======================================================
 
-const insertData = (index, data) => {
-  let _left = curData.slice(0, index + 1);
-  let _right = curData.slice(index + 1, curData.length);
-  setCurData(_left.concat(data).concat(_right));
-  echarts_react.getEchartsInstance().setOption(option);
-}
-
-const move = (range, delt) => {
-  let temp = curData;
-  for(let i = range[0]; i <= range[1]; i++) {
-    temp[i] += delt;
+  const insertData = (index, data) => {
+    let _left = curData.slice(0, index + 1);
+    let _right = curData.slice(index + 1, curData.length);
+    setCurData(_left.concat(data).concat(_right));
+    echarts_react.getEchartsInstance().setOption(option);
   }
-  setCurData(temp);
-  echarts_react.getEchartsInstance().setOption(option);
-}
 
-const flipX = (range) => {
-  let temp = curData;
-  let temp_1 = curData.map(v=>v);
-  for(let i = range[0], j = range[1]; i <= range[1]; i++, j--) {
-    temp[i] = temp_1[j];
-  }
-  setCurData(temp);
-  echarts_react.getEchartsInstance().setOption(option);
-}
-
-const flipY = (range) => {
-  let _max = curData[range[0]];
-  let _min = curData[range[0]];
-  let temp = curData;
-  for(let i = range[0]; i < range[1]; i++) {
-    if(temp[i] > _max) {
-      _max = temp[i];
+  const move = (range, delt) => {
+    let temp = curData;
+    for(let i = range[0]; i <= range[1]; i++) {
+      temp[i] += delt;
     }
-    if(temp[i] < _min) {
-      _min = temp[i];
+    setCurData(temp);
+    echarts_react.getEchartsInstance().setOption(option);
+  }
+
+  const flipX = (range) => {
+    let temp = curData;
+    let temp_1 = curData.map(v=>v);
+    for(let i = range[0], j = range[1]; i <= range[1]; i++, j--) {
+      temp[i] = temp_1[j];
     }
+    setCurData(temp);
+    echarts_react.getEchartsInstance().setOption(option);
   }
-  let _axis = (_max + _min)/2;
-  for(let i = range[0]; i < range[1]; i++) {
-    temp[i] -= 2*(temp[i] - _axis);
+
+  const flipY = (range) => {
+    let _max = curData[range[0]];
+    let _min = curData[range[0]];
+    let temp = curData;
+    for(let i = range[0]; i < range[1]; i++) {
+      if(temp[i] > _max) {
+        _max = temp[i];
+      }
+      if(temp[i] < _min) {
+        _min = temp[i];
+      }
+    }
+    let _axis = (_max + _min)/2;
+    for(let i = range[0]; i < range[1]; i++) {
+      temp[i] -= 2*(temp[i] - _axis);
+    }
+    setCurData(temp);
+    echarts_react.getEchartsInstance().setOption(option);
   }
-  setCurData(temp);
-  echarts_react.getEchartsInstance().setOption(option);
-}
 
 //========================================================
+
+  const onStepChange = (e) => {
+    //let v = parseFloat(e.target.value);
+    let v = e.target.value;
+    if(!/^\d+(\.\d+)?$/.test(v)) {
+      setMoveDelt(0);
+    } else {
+      setMoveDelt(parseFloat(v));
+    }
+  }
 
   let echarts_react = null;
 
@@ -757,6 +763,7 @@ const flipY = (range) => {
                         下载数据
                   </Button>
                   <Button
+                        danger
                         type='button'
                         onClick={onUndo}
                         type="dashed" icon={<UndoOutlined />} style={{marginRight:"10px", width:"100px"}} size={"small"} 
@@ -764,18 +771,7 @@ const flipY = (range) => {
                         回退操作
                   </Button>
                   单次平移步长：
-                  <Select defaultValue="5" size="small" style={{ width: 120, height: 20 }}  onChange={onHandleChange}>
-                    <Option value="1">1</Option>
-                    <Option value="2">2</Option>
-                    <Option value="3">3</Option>
-                    <Option value="4">4</Option>
-                    <Option value="5">5</Option>
-                    <Option value="6">6</Option>
-                    <Option value="7">7</Option>
-                    <Option value="8">8</Option>
-                    <Option value="9">9</Option>
-                    <Option value="10">10</Option>
-                  </Select>
+                  <Input onChange={onStepChange} defaultValue={moveDelt} size="small" style={{ width: 120, height: 20 }}/>
                 </>)
             }
           </div>
@@ -788,6 +784,7 @@ const flipY = (range) => {
                   <Tag visible={curData.length != 0 } color="green">当前选中范围：[{curRange[0]}, {curRange[1]}]</Tag>
                   <Tag visible={curData.length != 0 } color="orange">当前选中的点：{curSelected}</Tag>
                   <Tag visible={curData.length != 0 } color="green">可回退步数：{operationStack.length}</Tag>
+                  <Tag visible={curData.length != 0 } color="magenta">当前单次平移步长：{moveDelt}</Tag>
                 </div>
                 <div className=".chart-container box-shadow"> 
                   <ReactEcharts
